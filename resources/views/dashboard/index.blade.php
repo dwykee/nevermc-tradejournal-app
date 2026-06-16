@@ -34,7 +34,7 @@
 @section('content')
 
 {{-- ── Stats Grid ─────────────────────────────────────────────────────────── --}}
-<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+<div class="grid grid-cols-1 sm:grid-cols-2 2xl:grid-cols-4 gap-4 mb-6">
 
     {{-- Net PnL --}}
     <div class="stat-card bg-surface-2 border border-white/[0.06] rounded-xl p-4 transition-colors">
@@ -61,14 +61,14 @@
 
     {{-- Max Drawdown --}}
     <div class="stat-card bg-surface-2 border border-white/[0.06] rounded-xl p-4 transition-colors">
-        <p class="text-xs text-white/40 mb-2">Max Drawdown</p>
+        <p class="text-xs text-white/40 mb-2">Drawdown</p>
         <p class="text-2xl font-semibold text-loss">-${{ number_format($maxDrawdown, 2) }}</p>
         <p class="text-xs text-white/25 mt-1">worst trade -${{ number_format(abs($worstTrade), 2) }}</p>
     </div>
 </div>
 
 {{-- ── Row 2 Stats ─────────────────────────────────────────────────────────── --}}
-<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+<div class="grid grid-cols-1 xl:grid-cols-3 gap-4 mb-6">
 
     <div class="stat-card bg-surface-2 border border-white/[0.06] rounded-xl p-4 transition-colors">
         <p class="text-xs text-white/40 mb-2">Avg Trade</p>
@@ -91,17 +91,6 @@
         @else
         <p class="text-xl font-semibold text-white/30">—</p>
         @endif
-    </div>
-
-    <div class="stat-card bg-surface-2 border border-white/[0.06] rounded-xl p-4 transition-colors">
-        <p class="text-xs text-white/40 mb-2">Avg Hold Time</p>
-        <p class="text-xl font-semibold text-white">
-            @php
-                $h = floor($avgDuration / 3600);
-                $m = floor(($avgDuration % 3600) / 60);
-                echo $h > 0 ? "{$h}h {$m}m" : ($m > 0 ? "{$m}m" : round($avgDuration).'s');
-            @endphp
-        </p>
     </div>
 </div>
 

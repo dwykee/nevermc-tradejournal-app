@@ -3,12 +3,13 @@
 use Illuminate\Support\Facades\Route;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use App\Http\Controllers\AccountController;
+use App\Http\Controllers\TradeController;
 
 // ── Public routes ──────────────────────────────────────────────────────────────
-Route::get('/', function () {
-    if (Auth::check()) return redirect()->route('dashboard');
-    return view('welcome');
-})->name('home');
+Route::get('/welcome', function () {
+    return view('landing');
+})->name('landing');
 
 Route::get('/login', function () {
     if (Auth::check()) return redirect()->route('dashboard');
@@ -172,14 +173,99 @@ Route::middleware('auth')->group(function () {
         $entries = \App\Models\JournalEntry::where('user_id', Auth::id())
             ->orderByDesc('date')
             ->paginate(20);
-        return view('journal.index', compact('entries'));
+
+        $all = \App\Models\JournalEntry::where('user_id', Auth::id())->get();
+
+        $stats = [
+            'entries'  => $all->count(),
+            'lessons'  => $all->filter(fn ($e) => filled($e->lessons))->count(),
+            'mistakes' => $all->filter(fn ($e) => filled($e->went_wrong))->count(),
+            'winning'  => $all->filter(fn ($e) => filled($e->went_well))->count(),
+        ];
+
+        return view('journal.index', compact('entries', 'stats'));
     })->name('journal.index');
+
+    Route::post('/journal', function (Request $request) {
+        $request->validate([
+            'date'       => 'required|date',
+            'title'      => 'nullable|string|max:255',
+            'mood'       => 'nullable|string|max:50',
+            'went_well'  => 'nullable|string',
+            'went_wrong' => 'nullable|string',
+            'lessons'    => 'nullable|string',
+            'image'      => 'nullable|image|max:5120',
+        ]);
+
+        $imagePath = null;
+        if ($request->hasFile('image')) {
+            $imagePath = $request->file('image')->store('journal', 'public');
+        }
+
+        $content = collect([
+            $request->went_well  ? 'What went well: ' . $request->went_well : null,
+            $request->went_wrong ? 'What went wrong: ' . $request->went_wrong : null,
+            $request->lessons    ? 'Lessons: ' . $request->lessons : null,
+        ])->filter()->implode("\n\n");
+
+        \App\Models\JournalEntry::create([
+            'user_id'    => Auth::id(),
+            'date'       => $request->date,
+            'title'      => $request->title,
+            'mood'       => $request->mood,
+            'image'      => $imagePath,
+            'went_well'  => $request->went_well,
+            'went_wrong' => $request->went_wrong,
+            'lessons'    => $request->lessons,
+            'content'    => $content !== '' ? $content : '-',
+        ]);
+
+        return redirect()->route('journal.index')->with('success', 'Journal entry added!');
+    })->name('journal.store');
+
+    Route::delete('/journal/{id}', function ($id) {
+        $entry = \App\Models\JournalEntry::where('user_id', Auth::id())->findOrFail($id);
+
+        if ($entry->image) {
+            \Illuminate\Support\Facades\Storage::disk('public')->delete($entry->image);
+        }
+
+        $entry->delete();
+
+        return redirect()->route('journal.index')->with('success', 'Journal entry deleted.');
+    })->name('journal.destroy');
 
     // ── Accounts ─────────────────────────────────────────────────────────────
     Route::get('/accounts', function () {
         $accounts = \App\Models\Account::where('user_id', Auth::id())->get();
         return view('accounts.index', compact('accounts'));
     })->name('accounts.index');
+
+        Route::get('/accounts/create', function () {
+        return view('accounts.create');
+    })->name('accounts.create');
+
+    Route::post('/accounts', function (\Illuminate\Http\Request $request) {
+
+        $request->validate([
+            'name' => 'required|max:255',
+            'broker' => 'nullable|max:255',
+            'type' => 'required',
+            'starting_balance' => 'required|numeric'
+        ]);
+
+        \App\Models\Account::create([
+            'user_id' => Auth::id(),
+            'name' => $request->name,
+            'broker' => $request->broker,
+            'type' => $request->type,
+            'starting_balance' => $request->starting_balance,
+            'balance' => $request->starting_balance,
+        ]);
+
+        return redirect()->route('accounts.index');
+
+    })->name('accounts.store');
 
     // ── Trades ───────────────────────────────────────────────────────────────
     Route::get('/trades', function (Request $request) {
@@ -198,9 +284,184 @@ Route::middleware('auth')->group(function () {
         return view('trades.create', compact('accounts'));
     })->name('trades.create');
 
+    // ── Trade Calendar ──────────────────────────────────────────────────────
+    Route::get('/trades/calendar', function (Request $request) {
+        $monthParam = $request->query('month');
+        try {
+            $current = $monthParam
+                ? \Carbon\Carbon::createFromFormat('Y-m', $monthParam)->startOfMonth()
+                : \Carbon\Carbon::now()->startOfMonth();
+        } catch (\Exception $e) {
+            $current = \Carbon\Carbon::now()->startOfMonth();
+        }
+
+        $trades = \App\Models\Trade::where('user_id', Auth::id())
+            ->whereBetween('entry_time', [
+                $current->copy()->startOfMonth(),
+                $current->copy()->endOfMonth()->endOfDay(),
+            ])
+            ->get();
+
+        $byDate = $trades->groupBy(fn($t) => \Carbon\Carbon::parse($t->entry_time)->format('Y-m-d'));
+
+        return view('trades.calendar', compact('current', 'byDate'));
+        })->name('trades.calendar');
+
+    // ── Trade Gallery ───────────────────────────────────────────────────────
+    Route::get('/trades/gallery', function () {
+        $trades = \App\Models\Trade::where('user_id', Auth::id())
+            ->where(function ($q) {
+                $q->whereNotNull('screenshot_before')->orWhereNotNull('screenshot_after');
+            })
+            ->orderByDesc('entry_time')
+            ->get();
+
+        return view('trades.gallery', compact('trades'));
+    })->name('trades.gallery');
+
+    // trades closure
+    Route::post('/trades', function (Request $request) {
+        $grossPnl   = (float) $request->gross_pnl;
+        $commission = (float) ($request->commission ?? 0);
+        $netPnl     = $grossPnl - $commission;
+
+        \App\Models\Trade::create([
+            'user_id'           => Auth::id(),
+            'account_id'        => $request->account_id,
+            'instrument'        => $request->instrument,
+            'direction'         => $request->direction,
+            'quantity'          => $request->quantity,
+            'entry_price'       => $request->entry_price,
+            'exit_price'        => $request->exit_price,
+            'entry_time'        => $request->entry_time,
+            'exit_time'         => $request->exit_time,
+            'gross_pnl'         => $grossPnl,
+            'commission'        => $commission,
+            'net_pnl'           => $netPnl,
+            'status'            => $request->status,
+            'setup'             => $request->setup_tag,
+            'rating'            => $request->rating,
+            'notes'             => $request->notes,
+            'screenshot_before' => $request->hasFile('screenshot_before')
+                ? $request->file('screenshot_before')->store('trades', 'public') : null,
+            'screenshot_after'  => $request->hasFile('screenshot_after')
+                ? $request->file('screenshot_after')->store('trades', 'public') : null,
+        ]);
+
+        return redirect()->route('trades.index')->with('success', 'Trade added successfully.');
+    })->name('trades.store');
+
+    // ── Import CSV ─────────────────────────────────────────────────────────────
     Route::get('/trades/import', function () {
-        return view('trades.import');
+        $accounts = \App\Models\Account::where('user_id', Auth::id())->get();
+        return view('trades.import', compact('accounts'));
     })->name('trades.import');
+
+    Route::post('/trades/import', function (Request $request) {
+        $request->validate([
+            'csv_file'   => 'required|file|mimes:csv,txt|max:10240',
+            'account_id' => 'required|exists:accounts,id',
+        ]);
+
+        $handle = fopen($request->file('csv_file')->getRealPath(), 'r');
+        if ($handle === false) {
+            return back()->with('error', 'Gagal membaca file. Coba lagi.');
+        }
+
+        $aliases = [
+            'instrument'  => ['instrument', 'symbol', 'ticker', 'pair', 'market'],
+            'direction'   => ['direction', 'side', 'type', 'position'],
+            'quantity'    => ['quantity', 'qty', 'size', 'volume', 'lots', 'contracts'],
+            'entry_price' => ['entry_price', 'entry', 'entryprice', 'open_price', 'price_in', 'buy_price'],
+            'exit_price'  => ['exit_price', 'exit', 'exitprice', 'close_price', 'price_out', 'sell_price'],
+            'entry_time'  => ['entry_time', 'entry_date', 'open_time', 'open_date', 'date', 'opened'],
+            'exit_time'   => ['exit_time', 'exit_date', 'close_time', 'close_date', 'closed'],
+            'gross_pnl'   => ['gross_pnl', 'pnl', 'p&l', 'p_l', 'profit', 'gross', 'realized_pnl'],
+            'commission'  => ['commission', 'commissions', 'fee', 'fees', 'cost'],
+            'setup'       => ['setup', 'setup_tag', 'strategy', 'tag', 'tags'],
+            'status'      => ['status', 'state'],
+            'rating'      => ['rating', 'score', 'stars'],
+            'notes'       => ['notes', 'note', 'comment', 'comments', 'remark'],
+        ];
+
+        $num = function ($v) {
+            if ($v === null || $v === '') return null;
+            $v = str_replace(',', '', (string) $v);
+            $v = preg_replace('/[^0-9.\-]/', '', $v);
+            return $v === '' ? null : (float) $v;
+        };
+
+        $parseDate = function ($v) {
+            if (!$v) return null;
+            try { return \Carbon\Carbon::parse($v); } catch (\Exception $e) { return null; }
+        };
+
+        $header = null;
+        $imported = 0;
+        $skipped = 0;
+        $accountId = $request->input('account_id');
+
+        while (($row = fgetcsv($handle)) !== false) {
+            if (count($row) === 1 && trim((string) ($row[0] ?? '')) === '') continue;
+
+            if ($header === null) {
+                $header = array_map(fn ($h) => strtolower(trim(str_replace([' ', '-'], '_', (string) $h))), $row);
+                continue;
+            }
+
+            $row = array_pad($row, count($header), '');
+            $assoc = [];
+            foreach ($header as $i => $key) {
+                $assoc[$key] = is_string($row[$i]) ? trim($row[$i]) : $row[$i];
+            }
+
+            $pick = function (string $field) use ($aliases, $assoc) {
+                foreach ($aliases[$field] as $a) {
+                    if (isset($assoc[$a]) && $assoc[$a] !== '') return $assoc[$a];
+                }
+                return null;
+            };
+
+            $instrument = $pick('instrument');
+            if (!$instrument) { $skipped++; continue; }
+
+            $dirRaw = strtolower((string) $pick('direction'));
+            $direction = (str_contains($dirRaw, 'sell') || str_contains($dirRaw, 'short')) ? 'short' : 'long';
+
+            $gross = $num($pick('gross_pnl')) ?? 0;
+            $commission = $num($pick('commission')) ?? 0;
+
+            $statusRaw = strtolower((string) $pick('status'));
+            $status = in_array($statusRaw, ['open', 'closed', 'cancelled']) ? $statusRaw : 'closed';
+
+            $rating = $num($pick('rating'));
+            if ($rating !== null) { $rating = max(1, min(5, (int) $rating)); }
+
+            \App\Models\Trade::create([
+                'user_id'     => Auth::id(),
+                'account_id'  => $accountId,
+                'instrument'  => $instrument,
+                'direction'   => $direction,
+                'quantity'    => $num($pick('quantity')),
+                'entry_price' => $num($pick('entry_price')),
+                'exit_price'  => $num($pick('exit_price')),
+                'entry_time'  => $parseDate($pick('entry_time')),
+                'exit_time'   => $parseDate($pick('exit_time')),
+                'gross_pnl'   => $gross,
+                'commission'  => $commission,
+                'net_pnl'     => $gross - $commission,
+                'setup'       => $pick('setup'),
+                'notes'       => $pick('notes'),
+                'status'      => $status,
+                'rating'      => $rating,
+            ]);
+            $imported++;
+        }
+        fclose($handle);
+
+        return redirect()->route('trades.index')
+            ->with('success', "Import selesai: {$imported} trade berhasil, {$skipped} baris dilewati.");
+    })->name('trades.import.store');
 
     Route::delete('/trades/bulk-destroy', function () {
         return back();
@@ -222,3 +483,7 @@ Route::middleware('auth')->group(function () {
         return redirect()->route('trades.index')->with('success', 'Trade deleted.');
     })->name('trades.destroy');
 });
+
+
+
+

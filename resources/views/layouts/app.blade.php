@@ -1,224 +1,227 @@
-<?php
-
-use Illuminate\Support\Facades\Route;
-use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
-
-// ── Public routes ──────────────────────────────────────────────────────────────
-Route::get('/', function () {
-    if (Auth::check()) return redirect()->route('dashboard');
-    return view('welcome');
-})->name('home');
-
-Route::get('/login', function () {
-    if (Auth::check()) return redirect()->route('dashboard');
-    return view('auth.login');
-})->name('login');
-
-Route::get('/register', function () {
-    if (Auth::check()) return redirect()->route('dashboard');
-    return view('auth.register');
-})->name('register');
-
-// ── Auth POST routes ───────────────────────────────────────────────────────────
-Route::post('/login', function (Request $request) {
-    $credentials = $request->validate([
-        'email'    => ['required', 'email'],
-        'password' => ['required'],
-    ]);
-
-    if (Auth::attempt($credentials, $request->boolean('remember'))) {
-        $request->session()->regenerate();
-        return redirect()->intended(route('dashboard'));
-    }
-
-    return back()->withErrors(['email' => 'Email atau password salah.'])->onlyInput('email');
-})->name('login.submit');
-
-Route::post('/register', function (Request $request) {
-    $request->validate([
-        'name'     => ['required', 'string', 'max:255'],
-        'email'    => ['required', 'email', 'unique:users'],
-        'password' => ['required', 'min:8', 'confirmed'],
-    ]);
-
-    $user = \App\Models\User::create([
-        'name'     => $request->name,
-        'email'    => $request->email,
-        'password' => bcrypt($request->password),
-    ]);
-
-    Auth::login($user);
-    return redirect()->route('dashboard');
-})->name('register.submit');
-
-Route::post('/logout', function (Request $request) {
-    Auth::logout();
-    $request->session()->invalidate();
-    $request->session()->regenerateToken();
-    return redirect()->route('login');
-})->name('logout');
-
-// ── Authenticated routes ───────────────────────────────────────────────────────
-Route::middleware('auth')->group(function () {
-
-    // Dashboard
-    Route::get('/dashboard', function (Request $request) {
-        $user      = Auth::user();
-        $period    = $request->get('period', '30');
-        $accountId = $request->get('account_id');
-
-        // Ambil semua accounts user
-        $accounts = \App\Models\Account::where('user_id', $user->id)->get();
-
-        // Query trades
-        $query = \App\Models\Trade::where('user_id', $user->id)
-            ->whereNotNull('exit_price');
-
-        if ($accountId) {
-            $query->where('account_id', $accountId);
+<!DOCTYPE html>
+<html lang="en" class="dark">
+    <style>
+        select option {
+            background-color: #1a1a1a;
+            color: #ffffff;
         }
-
-        if ($period !== 'all') {
-            $query->where('entry_time', '>=', now()->subDays((int) $period));
+        select option:checked {
+            background-color: #2563eb; /* blue-600 */
+            color: #ffffff;
         }
+    </style>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="{{ csrf_token() }}">
+    <title>@yield('title', 'NeverMC') — NeverMC</title>
 
-        $trades = $query->orderBy('entry_time')->get();
+    {{-- Tailwind CSS --}}
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        background: '#0b0d12',
 
-        // ── Stats ──────────────────────────────────────────────────────────────
-        $totalTrades    = $trades->count();
-        $wins           = $trades->where('net_pnl', '>', 0)->count();
-        $losses         = $trades->where('net_pnl', '<=', 0)->count();
-        $winRate        = $totalTrades > 0 ? round($wins / $totalTrades * 100, 1) : 0;
-        $totalNetPnl    = $trades->sum('net_pnl');
-        $totalCommission = $trades->sum('commission');
-        $grossWin       = $trades->where('net_pnl', '>', 0)->sum('net_pnl');
-        $grossLoss      = abs($trades->where('net_pnl', '<', 0)->sum('net_pnl'));
-        $profitFactor   = $grossLoss > 0 ? round($grossWin / $grossLoss, 2) : ($grossWin > 0 ? '∞' : 0);
-        $avgWin         = $wins > 0 ? $grossWin / $wins : 0;
-        $avgTradePnl    = $totalTrades > 0 ? $totalNetPnl / $totalTrades : 0;
-        $bestTrade      = $trades->max('net_pnl') ?? 0;
-        $worstTrade     = $trades->min('net_pnl') ?? 0;
+                        surface: '#0b0d12',
+                        'surface-dim': '#0b0d12',
 
-        // Avg hold time (seconds)
-        $avgDuration = $trades->filter(fn($t) => $t->exit_time && $t->entry_time)
-            ->avg(fn($t) => $t->entry_time->diffInSeconds($t->exit_time)) ?? 0;
+                        'surface-container-lowest': '#06070a',
+                        'surface-container-low': '#11141b',
+                        'surface-container': '#161a23',
+                        'surface-container-high': '#1d2330',
+                        'surface-container-highest': '#252c3c',
 
-        // Max drawdown
-        $peak = 0; $equity = 0; $maxDrawdown = 0;
-        foreach ($trades as $t) {
-            $equity += $t->net_pnl;
-            if ($equity > $peak) $peak = $equity;
-            $dd = $peak - $equity;
-            if ($dd > $maxDrawdown) $maxDrawdown = $dd;
-        }
+                        'surface-bright': '#2f3850',
+                        'surface-variant': '#2a3142',
 
-        // Current streak
-        $sorted       = $trades->sortByDesc('entry_time')->values();
-        $currentStreak = 0;
-        $streakType   = 'win';
-        if ($sorted->isNotEmpty()) {
-            $streakType = $sorted[0]->net_pnl > 0 ? 'win' : 'loss';
-            foreach ($sorted as $t) {
-                $isWin = $t->net_pnl > 0;
-                if (($streakType === 'win' && $isWin) || ($streakType === 'loss' && !$isWin)) {
-                    $currentStreak++;
-                } else {
-                    break;
+                        outline: '#7c8aa8',
+                        'outline-variant': '#3a4257',
+
+                        'on-surface': '#e6eaf5',
+                        'on-surface-variant': '#b8c2d9',
+
+                        'inverse-surface': '#e6eaf5',
+                        'inverse-on-surface': '#2a3142',
+
+                        primary: '#aac4ff',
+                        'primary-container': '#3D63FF',
+
+                        'on-primary': '#00205c',
+                        'on-primary-container': '#EAF0FF',
+                    }
                 }
             }
         }
+    </script>
 
-        // Equity curve
-        $equityCurve = [];
-        $cumulative  = 0;
-        foreach ($trades->groupBy(fn($t) => $t->entry_time->toDateString()) as $date => $dayTrades) {
-            $cumulative += $dayTrades->sum('net_pnl');
-            $equityCurve[] = ['date' => $date, 'value' => round($cumulative, 2)];
+    {{-- Google Fonts --}}
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+    {{-- Chart.js --}}
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
+    <style>
+        * { box-sizing: border-box; }
+        body { background: #0f0f10; color: #e2e2e6; font-family: 'Inter', sans-serif; }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 4px; height: 4px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
+
+        /* Sidebar active state */
+        .nav-link.active { background: rgba(124,106,255,0.12); color: #a99fff; }
+        .nav-link.active svg { color: #7c6aff; }
+        .nav-link:hover:not(.active) { background: rgba(255,255,255,0.04); }
+
+        /* Stat card hover */
+        .stat-card:hover { border-color: rgba(255,255,255,0.12); }
+
+        /* Table row hover */
+        .trade-row:hover { background: rgba(255,255,255,0.025); }
+
+        /* Input focus */
+        input:focus, select:focus, textarea:focus {
+            outline: none;
+            border-color: rgba(124,106,255,0.5) !important;
+            box-shadow: 0 0 0 3px rgba(124,106,255,0.1);
         }
 
-        // Daily PnL
-        $dailyPnl = $trades->groupBy(fn($t) => $t->entry_time->toDateString())
-            ->map(fn($g) => round($g->sum('net_pnl'), 2))
-            ->toArray();
+        /* Flash messages */
+        .flash-success { background: rgba(52,211,153,0.1); border-color: rgba(52,211,153,0.25); color: #34d399; }
+        .flash-error   { background: rgba(248,113,113,0.1); border-color: rgba(248,113,113,0.25); color: #f87171; }
+    </style>
 
-        // PnL by instrument
-        $pnlByInstrument = $trades->groupBy('instrument')
-            ->map(fn($g) => ['pnl' => round($g->sum('net_pnl'), 2), 'count' => $g->count()])
-            ->sortByDesc('pnl');
+    @stack('styles')
+</head>
+<body class="min-h-screen flex bg-surface">
 
-        // Recent trades
-        $recentTrades = \App\Models\Trade::where('user_id', $user->id)
-            ->when($accountId, fn($q) => $q->where('account_id', $accountId))
-            ->orderByDesc('entry_time')
-            ->limit(10)
-            ->get();
+    {{-- ── Sidebar ──────────────────────────────────────────────────────────── --}}
+    <aside class="w-64 flex-shrink-0 flex flex-col border-r border-white/[0.07] bg-surface-1 fixed inset-y-0 left-0 z-30">
 
-        return view('dashboard.index', compact(
-            'accounts', 'period', 'accountId',
-            'totalTrades', 'wins', 'losses', 'winRate',
-            'totalNetPnl', 'totalCommission',
-            'profitFactor', 'avgWin',
-            'avgTradePnl', 'bestTrade', 'worstTrade',
-            'maxDrawdown', 'avgDuration',
-            'currentStreak', 'streakType',
-            'equityCurve', 'dailyPnl', 'pnlByInstrument',
-            'recentTrades'
-        ));
-    })->name('dashboard');
+        {{-- Logo --}}
+        <div class="h-16 flex items-center px-5 border-b border-white/[0.07]">
+            <span class="text-lg font-semibold tracking-tight">
+                <span class="text-accent">Never</span><span class="text-white">MC</span>
+            </span>
+        </div>
 
-    // ── Journal ──────────────────────────────────────────────────────────────
-    Route::get('/journal', function () {
-        $entries = \App\Models\JournalEntry::where('user_id', Auth::id())
-            ->orderByDesc('date')
-            ->paginate(20);
-        return view('journal.index', compact('entries'));
-    })->name('journal.index');
+        {{-- Nav --}}
+        <nav class="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
 
-    // ── Accounts ─────────────────────────────────────────────────────────────
-    Route::get('/accounts', function () {
-        $accounts = \App\Models\Account::where('user_id', Auth::id())->get();
-        return view('accounts.index', compact('accounts'));
-    })->name('accounts.index');
+            @php $seg = request()->segment(1); @endphp
 
-    // ── Trades ───────────────────────────────────────────────────────────────
-    Route::get('/trades', function (Request $request) {
-        $accounts  = \App\Models\Account::where('user_id', Auth::id())->get();
-        $setupTags = collect();
+            <a href="{{ route('dashboard') }}"
+               class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-white/70 transition-colors {{ $seg === 'dashboard' ? 'active' : '' }}">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"
+                          d="M4 6h16M4 10h16M4 14h16M4 18h7"/>
+                </svg>
+                Dashboard
+            </a>
 
-        $trades = \App\Models\Trade::where('user_id', Auth::id())
-            ->orderByDesc('entry_time')
-            ->paginate(25);
+            <a href="{{ route('trades.index') }}"
+               class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-white/70 transition-colors {{ $seg === 'trades' ? 'active' : '' }}">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"
+                          d="M3 3h18M3 9h18M3 15h11M3 21h7"/>
+                </svg>
+                Trades
+            </a>
 
-        return view('trades.index', compact('trades', 'accounts', 'setupTags'));
-    })->name('trades.index');
+            <a href="{{ route('journal.index') }}"
+               class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-white/70 transition-colors {{ $seg === 'journal' ? 'active' : '' }}">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"
+                          d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.966 8.966 0 00-6 2.292m0-14.25v14.25"/>
+                </svg>
+                Journal
+            </a>
 
-    Route::get('/trades/create', function () {
-        $accounts = \App\Models\Account::where('user_id', Auth::id())->get();
-        return view('trades.create', compact('accounts'));
-    })->name('trades.create');
+            <a href="{{ route('accounts.index') }}"
+               class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-white/70 transition-colors {{ $seg === 'accounts' ? 'active' : '' }}">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"
+                          d="M2.25 18.75a60.07 60.07 0 0115.797 2.101c.727.198 1.453-.342 1.453-1.096V18.75M3.75 4.5v.75A.75.75 0 013 6h-.75m0 0v-.375c0-.621.504-1.125 1.125-1.125H20.25M2.25 6v9m18-10.5v.75c0 .414.336.75.75.75h.75m-1.5-1.5h.375c.621 0 1.125.504 1.125 1.125v9.75c0 .621-.504 1.125-1.125 1.125h-.375m1.5-1.5H21a.75.75 0 00-.75.75v.75m0 0H3.75m0 0h-.375a1.125 1.125 0 01-1.125-1.125V15m1.5 1.5v-.75A.75.75 0 003 15h-.75"/>
+                </svg>
+                Accounts
+            </a>
 
-    Route::get('/trades/import', function () {
-        return view('trades.import');
-    })->name('trades.import');
+            <div class="pt-3 pb-1 px-3">
+                <span class="text-[10px] uppercase tracking-widest text-white/25 font-medium">Import</span>
+            </div>
 
-    Route::delete('/trades/bulk-destroy', function () {
-        return back();
-    })->name('trades.bulk-destroy');
+            <a href="{{ route('trades.import') }}"
+               class="nav-link flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-white/70 transition-colors">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"
+                          d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/>
+                </svg>
+                Import CSV
+            </a>
+        </nav>
 
-    Route::get('/trades/{id}', function ($id) {
-        $trade = \App\Models\Trade::where('user_id', Auth::id())->findOrFail($id);
-        return view('trades.show', compact('trade'));
-    })->name('trades.show');
+        {{-- User footer --}}
+        <div class="px-3 py-3 border-t border-white/[0.07]">
+            <div class="flex items-center gap-3 px-3 py-2 rounded-lg">
+                <div class="w-7 h-7 rounded-full bg-accent/20 flex items-center justify-center text-xs font-medium text-accent flex-shrink-0">
+                    {{ strtoupper(substr(Auth::user()->name, 0, 1)) }}
+                </div>
+                <div class="flex-1 min-w-0">
+                    <p class="text-sm text-white/90 truncate font-medium">{{ Auth::user()->name }}</p>
+                    <p class="text-xs text-white/35 truncate">{{ Auth::user()->email }}</p>
+                </div>
+                <form method="POST" action="{{ route('logout') }}">
+                    @csrf
+                    <button type="submit" class="text-white/30 hover:text-white/70 transition-colors" title="Logout">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"
+                                  d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15M12 9l-3 3m0 0l3 3m-3-3h12.75"/>
+                        </svg>
+                    </button>
+                </form>
+            </div>
+        </div>
+    </aside>
 
-    Route::get('/trades/{id}/edit', function ($id) {
-        $trade    = \App\Models\Trade::where('user_id', Auth::id())->findOrFail($id);
-        $accounts = \App\Models\Account::where('user_id', Auth::id())->get();
-        return view('trades.edit', compact('trade', 'accounts'));
-    })->name('trades.edit');
+    {{-- ── Main content ──────────────────────────────────────────────────────── --}}
+    <main class="flex-1 ml-64 min-h-screen flex flex-col">
 
-    Route::delete('/trades/{id}', function ($id) {
-        \App\Models\Trade::where('user_id', Auth::id())->findOrFail($id)->delete();
-        return redirect()->route('trades.index')->with('success', 'Trade deleted.');
-    })->name('trades.destroy');
-});
+        {{-- Top bar --}}
+        <header class="h-16 flex items-center px-8 border-b border-white/[0.07] bg-surface-1/50 backdrop-blur sticky top-0 z-20">
+            <div class="flex-1">
+                <h1 class="text-base font-medium text-white/90">@yield('page-title', 'Dashboard')</h1>
+            </div>
+            <div class="flex items-center gap-3">
+                @yield('header-actions')
+            </div>
+        </header>
+
+        {{-- Flash messages --}}
+        @if(session('success'))
+        <div class="mx-8 mt-4 px-4 py-3 rounded-lg border flash-success text-sm">
+            {{ session('success') }}
+        </div>
+        @endif
+        @if(session('error') || $errors->any())
+        <div class="mx-8 mt-4 px-4 py-3 rounded-lg border flash-error text-sm">
+            {{ session('error') ?? $errors->first() }}
+        </div>
+        @endif
+
+        {{-- Page content --}}
+        <div class="flex-1 px-6 xl:px-8 py-6 overflow-x-hidden">
+            <div class="max-w-[1500px] mx-auto">
+                @yield('content')
+            </div>
+        </div>
+    </main>
+
+    @stack('scripts')
+</body>
+</html>

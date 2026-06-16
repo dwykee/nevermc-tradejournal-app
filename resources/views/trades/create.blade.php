@@ -1,13 +1,63 @@
 @extends('layouts.app')
 @section('title', 'Add Trade')
-@section('page-title', 'Add Trade')
+@section('page-title', '')
 
 @section('content')
-<div class="max-w-2xl">
-    <div class="bg-surface-2 border border-white/[0.06] rounded-xl p-6">
+<div class="max-w-5xl mx-auto">    <div class="bg-surface-2 border border-white/[0.06] rounded-xl p-6">
+        <div class="mb-6 pb-4 border-b border-white/[0.06]">
+            <h2 class="text-lg font-semibold text-white">
+                Add Trade
+            </h2>
 
-        <form method="POST" action="{{ route('trades.store') }}" class="space-y-5">
+            <p class="text-sm text-white/40 mt-1">
+                Record a completed trade for analysis and review.
+            </p>
+        </div>
+
+        <form method="POST" action="{{ route('trades.store') }}" class="space-y-5" enctype="multipart/form-data">
             @csrf
+
+            <!-- Screenshots: before & after entry -->
+            <div class="grid grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-xs text-white/40 mb-1.5">Screenshot Before Entry</label>
+                    <label for="screenshotBefore"
+                           class="flex flex-col items-center justify-center w-full min-h-[140px] border-2 border-dashed border-white/[0.12] rounded-xl cursor-pointer bg-white/[0.02] hover:bg-white/[0.04] hover:border-blue-500/40 transition p-4">
+                        <div id="phBefore" class="flex flex-col items-center justify-center text-center">
+                            <div class="w-10 h-10 rounded-xl bg-blue-500/10 flex items-center justify-center mb-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2"/>
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 4v12m0-12l-4 4m4-4l4 4"/>
+                                </svg>
+                            </div>
+                            <p class="text-xs text-white/70"><span class="text-blue-400 font-medium">Click to upload</span></p>
+                            <p class="text-[10px] text-white/30 mt-1">PNG or JPG</p>
+                        </div>
+                        <img id="prevBefore" class="hidden max-h-32 rounded-lg object-contain" alt="Preview">
+                        <p id="phBeforeName" class="hidden text-[10px] text-white/40 mt-2"></p>
+                        <input id="screenshotBefore" type="file" name="screenshot_before" accept="image/*" class="hidden js-upload" data-preview="prevBefore" data-placeholder="phBefore" data-name="phBeforeName">
+                    </label>
+                </div>
+                <div>
+                    <label class="block text-xs text-white/40 mb-1.5">Screenshot After Entry</label>
+                    <label for="screenshotAfter"
+                           class="flex flex-col items-center justify-center w-full min-h-[140px] border-2 border-dashed border-white/[0.12] rounded-xl cursor-pointer bg-white/[0.02] hover:bg-white/[0.04] hover:border-blue-500/40 transition p-4">
+                        <div id="phAfter" class="flex flex-col items-center justify-center text-center">
+                            <div class="w-10 h-10 rounded-xl bg-blue-500/10 flex items-center justify-center mb-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2"/>
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 4v12m0-12l-4 4m4-4l4 4"/>
+                                </svg>
+                            </div>
+                            <p class="text-xs text-white/70"><span class="text-blue-400 font-medium">Click to upload</span></p>
+                            <p class="text-[10px] text-white/30 mt-1">PNG or JPG</p>
+                        </div>
+                        <img id="prevAfter" class="hidden max-h-32 rounded-lg object-contain" alt="Preview">
+                        <p id="phAfterName" class="hidden text-[10px] text-white/40 mt-2"></p>
+                        <input id="screenshotAfter" type="file" name="screenshot_after" accept="image/*" class="hidden js-upload" data-preview="prevAfter" data-placeholder="phAfter" data-name="phAfterName">
+                    </label>
+                </div>
+            </div>
 
             {{-- Account & Instrument --}}
             <div class="grid grid-cols-2 gap-4">
@@ -144,9 +194,6 @@
         </form>
     </div>
 </div>
-@endsection
-
-@push('scripts')
 <script>
 function calcNet() {
     const gross = parseFloat(document.getElementById('grossPnl').value) || 0;
@@ -156,5 +203,23 @@ function calcNet() {
     el.textContent = (net >= 0 ? '+' : '') + '$' + net.toFixed(2);
     el.className = 'text-sm font-mono font-semibold ' + (net >= 0 ? 'text-emerald-400' : 'text-red-400');
 }
+
+document.querySelectorAll('.js-upload').forEach(function (input) {
+    input.addEventListener('change', function () {
+        var file = this.files && this.files[0];
+        if (!file) { return; }
+        var preview = document.getElementById(this.dataset.preview);
+        var placeholder = document.getElementById(this.dataset.placeholder);
+        var nameEl = document.getElementById(this.dataset.name);
+        var reader = new FileReader();
+        reader.onload = function (ev) {
+            if (preview) { preview.src = ev.target.result; preview.classList.remove('hidden'); }
+            if (placeholder) { placeholder.classList.add('hidden'); }
+            if (nameEl) { nameEl.textContent = file.name; nameEl.classList.remove('hidden'); }
+        };
+        reader.readAsDataURL(file);
+    });
+});
+
 </script>
-@endpush
+@endsection
