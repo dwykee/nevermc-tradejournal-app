@@ -7,6 +7,10 @@ use App\Http\Controllers\AccountController;
 use App\Http\Controllers\TradeController;
 
 // ── Public routes ──────────────────────────────────────────────────────────────
+Route::get('/', function () {
+    return redirect()->route('landing');
+});
+
 Route::get('/welcome', function () {
     return view('landing');
 })->name('landing');
